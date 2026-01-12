@@ -110,12 +110,12 @@ pub(crate) fn prepare_custom_claims_map(
         "collateral_expiration_status".to_string(),
         Value::String(collateral_expiration_status.to_string()),
     );
-    claims_map.insert("advisory_ids".to_string(), get_sa_list(&supp_data.sa_list));
+    claims_map.insert("advisory_ids".to_string(), get_sa_list(supp_data.sa_list.as_ptr()));
     claims_map
 }
 
-fn get_sa_list(sa_list: &[c_char; 320]) -> Value {
-    let c_str = unsafe { CStr::from_ptr(sa_list.as_ptr()) };
+fn get_sa_list(sa_list: *const c_char) -> Value {
+    let c_str = unsafe { CStr::from_ptr(sa_list) };
 
     let advisory_ids = c_str.to_string_lossy();
 

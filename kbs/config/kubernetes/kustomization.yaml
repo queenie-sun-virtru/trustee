@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: trustee-operator-system
+resources:
+  - base
+patches:
+  - path: deployment-patch.yaml
+    target:
+      kind: Deployment
+      name: kbs
+images:
+  - name: kbs-container-image
+    newName: ghcr.io/confidential-containers/staged-images/kbs
+    newTag: latest
+configMapGenerator:
+  - name: kbs-config
+    behavior: replace
+    files:
+      - kbs-config.toml
+secretGenerator:
+  - name: spiffe-ca
+    files:
+      - base/spiffe-ca-cert.pem
+      - base/spiffe-ca-key.pem

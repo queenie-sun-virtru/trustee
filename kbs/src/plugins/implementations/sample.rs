@@ -7,6 +7,7 @@
 use actix_web::http::Method;
 use anyhow::Result;
 use serde::Deserialize;
+use serde_json::Value;
 
 use super::super::plugin_manager::ClientPlugin;
 
@@ -35,6 +36,7 @@ impl ClientPlugin for Sample {
         _query: &str,
         _path: &str,
         _method: &Method,
+        _claims: Option<&Value>,
     ) -> Result<Vec<u8>> {
         Ok("sample plugin response".as_bytes().to_vec())
     }

@@ -1,0 +1,25 @@
+[http_server]
+sockets = ["0.0.0.0:8080"]
+insecure_http = true
+[attestation_token]
+insecure_key = true
+[attestation_service]
+type = "coco_as_builtin"
+work_dir = "/opt/confidential-containers/attestation-service"
+[attestation_service.attestation_token_broker]
+type = "Ear"
+duration_min = 5
+[attestation_service.rvps_config]
+type = "BuiltIn"
+[admin]
+type = "Simple"
+[[admin.personas]]
+id = "kbs-spiffe-agent"
+public_key_path = "/kbs/kbs.pem"
+[[plugins]]
+name = "spiffe-resource"
+trust_domain = "virtru.io"
+ca_cert_path = "/kbs-secrets/spiffe-ca-cert.pem"
+ca_key_path = "/kbs-secrets/spiffe-ca-key.pem"
+cert_ttl_hours = 24
+expected_hardware = { allowed_tee_types = ["sev-snp", "mock-sev-snp"], allow_mock_attestation = true, require_policy_compliance = false }

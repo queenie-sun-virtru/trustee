@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kbs
+spec:
+  template:
+    spec:
+      containers:
+      - name: kbs
+        volumeMounts:
+        - name: kbs-auth-public-key
+          mountPath: /kbs/
+        - name: kbs-config
+          mountPath: /etc/kbs/
+        - name: policy-volume
+          mountPath: /opt/confidential-containers/kbs/
+        - name: spiffe-ca
+          mountPath: /kbs-secrets/
+          readOnly: true
+      volumes:
+      - name: kbs-auth-public-key
+        secret:
+          secretName: kbs-auth-public-key
+      - name: kbs-config
+        configMap:
+          name: kbs-config
+      - name: policy-volume
+        emptyDir: {}
+      - name: config-volume
+        configMap:
+          name: policy-config
+      - name: spiffe-ca
+        secret:
+          secretName: spiffe-ca

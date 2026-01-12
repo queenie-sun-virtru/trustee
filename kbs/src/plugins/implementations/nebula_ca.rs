@@ -399,6 +399,7 @@ impl ClientPlugin for NebulaCaPlugin {
         query: &str,
         path: &str,
         method: &Method,
+        _claims: Option<&Value>,
     ) -> Result<Vec<u8>> {
         let sub_path = path
             .strip_prefix('/')

@@ -275,7 +275,7 @@ pub(crate) async fn api(
                 // Plugin calls need to be authorized by the admin auth
                 core.admin.validate_admin_token(&request)?;
                 let response = plugin
-                    .handle(&body, query, additional_path, request.method())
+                    .handle(&body, query, additional_path, request.method(), None)
                     .await
                     .map_err(|e| Error::PluginInternalError { source: e })?;
 
@@ -305,7 +305,7 @@ pub(crate) async fn api(
                 KBS_POLICY_APPROVALS.inc();
 
                 let response = plugin
-                    .handle(&body, query, additional_path, request.method())
+                    .handle(&body, query, additional_path, request.method(), Some(&claims))
                     .await
                     .map_err(|e| Error::PluginInternalError { source: e })?;
                 if plugin

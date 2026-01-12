@@ -12,6 +12,7 @@ pub mod vault_kv;
 
 use actix_web::http::Method;
 use anyhow::{bail, Context, Result};
+use serde_json::Value;
 
 pub mod backend;
 pub use backend::*;
@@ -26,6 +27,7 @@ impl ClientPlugin for ResourceStorage {
         _query: &str,
         path: &str,
         method: &Method,
+        _claims: Option<&Value>,
     ) -> Result<Vec<u8>> {
         let resource_desc = path
             .strip_prefix('/')

@@ -33,6 +33,9 @@ aliyun = ["kms/aliyun"]
 # Use pkcs11 plugin
 pkcs11 = ["cryptoki"]
 
+# Use SPIFFE SVID plugin
+spiffe-plugin = []
+
 # Use Nebula Certificate Authority plugin to provide CA services to nodes
 # that want to join a Nebula overlay network
 nebula-ca-plugin = []

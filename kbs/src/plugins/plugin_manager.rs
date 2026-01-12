@@ -7,6 +7,7 @@ use std::{collections::HashMap, fmt::Display, sync::Arc};
 use actix_web::http::Method;
 use anyhow::{Context, Error, Result};
 use serde::Deserialize;
+use serde_json::Value;
 
 use super::{sample, RepositoryConfig, ResourceStorage};
 
@@ -15,6 +16,9 @@ use super::{NebulaCaPlugin, NebulaCaPluginConfig};
 
 #[cfg(feature = "pkcs11")]
 use super::{Pkcs11Backend, Pkcs11Config};
+
+#[cfg(feature = "spiffe-plugin")]
+use super::{SpiffePlugin, SpiffePluginConfig};
 
 type ClientPluginInstance = Arc<dyn ClientPlugin>;
 
@@ -26,12 +30,18 @@ pub trait ClientPlugin: Send + Sync {
     ///
     /// TODO: change body from Vec slice into Reader to apply for large
     /// body stream.
+    ///
+    ///  `claims` - Optional claims extracted from the attestation token. Contains key-value
+    ///   pairs from the verified TEE attestation (e.g., tee type, TCB status, custom claims).
+    ///   Only populated for endpoints requiring attestation; `None` for admin-only or
+    ///   unauthenticated endpoints. Example: `{"tee": "snp", "tcb": {...}, "namespace": "prod"}`
     async fn handle(
         &self,
         body: &[u8],
         query: &str,
         path: &str,
         method: &Method,
+        claims: Option<&Value>,
     ) -> Result<Vec<u8>>;
 
     /// Whether the concrete request needs to validate the admin auth.
@@ -73,6 +83,10 @@ pub enum PluginsConfig {
     #[cfg(feature = "pkcs11")]
     #[serde(alias = "pkcs11")]
     Pkcs11(Pkcs11Config),
+
+    #[cfg(feature = "spiffe-plugin")]
+    #[serde(alias = "spiffe")]
+    Spiffe(SpiffePluginConfig),
 }
 
 impl Display for PluginsConfig {
@@ -84,6 +98,8 @@ impl Display for PluginsConfig {
             PluginsConfig::NebulaCaPlugin(_) => f.write_str("nebula-ca"),
             #[cfg(feature = "pkcs11")]
             PluginsConfig::Pkcs11(_) => f.write_str("pkcs11"),
+            #[cfg(feature = "spiffe-plugin")]
+            PluginsConfig::Spiffe(_) => f.write_str("spiffe"),
         }
     }
 }
@@ -114,6 +130,12 @@ impl TryInto<ClientPluginInstance> for PluginsConfig {
                 let pkcs11 = Pkcs11Backend::try_from(pkcs11_config)
                     .context("Initialize 'pkcs11' plugin failed")?;
                 Arc::new(pkcs11) as _
+            }
+            #[cfg(feature = "spiffe-plugin")]
+            PluginsConfig::Spiffe(spiffe_config) => {
+                let spiffe = SpiffePlugin::try_from(spiffe_config)
+                    .context("Initialize 'spiffe' plugin failed")?;
+                Arc::new(spiffe) as _
             }
         };
 
