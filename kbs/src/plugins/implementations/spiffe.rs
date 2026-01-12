@@ -1,1 +1,1 @@
-/Users/queenie.sun/Documents/GitHub/kbs-spiffe-agent/kbs-plugin/spiffe.rs
+../../../../../src/kbs-plugin/spiffe.rs
