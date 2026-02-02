@@ -23,6 +23,7 @@ use cryptoki::{
 };
 use derivative::Derivative;
 use serde::Deserialize;
+use serde_json::Value;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 use uuid::Uuid;
