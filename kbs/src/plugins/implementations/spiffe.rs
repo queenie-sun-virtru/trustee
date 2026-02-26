@@ -496,6 +496,22 @@ impl ClientPlugin for SpiffePlugin {
                             self.trust_domain
                         );
                     }
+                    // Validate path characters per the SPIFFE spec. The path
+                    // portion must not contain control characters (including null
+                    // bytes), and must not contain dot-segment traversal patterns
+                    // that could confuse downstream path handling.
+                    let path = &requested_id[expected_prefix.len() - 1..];
+                    if path.bytes().any(|b| b < 0x20 || b == 0x7f) {
+                        bail!("Requested SPIFFE ID contains invalid control characters");
+                    }
+                    if path.contains("//")
+                        || path.contains("/./")
+                        || path.contains("/../")
+                        || path.ends_with("/.")
+                        || path.ends_with("/..")
+                    {
+                        bail!("Requested SPIFFE ID contains invalid path segments");
+                    }
                     log::info!("Issuing agent-requested SPIFFE ID: {}", requested_id);
                     requested_id
                 } else {
@@ -1014,6 +1030,47 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("not in trust domain"), "Expected trust domain error, got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn test_handle_svid_rejects_control_chars_in_path() {
+        let plugin = create_test_plugin();
+        let claims = serde_json::json!({"tee": "sev-snp"});
+
+        // Null byte embedded in path
+        let result = plugin
+            .handle(
+                &[],
+                "spiffe_id=spiffe://example.org/workload/foo%00bar",
+                "/svid/x509",
+                &Method::GET,
+                Some(&claims),
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("control characters"), "Expected control char error, got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn test_handle_svid_rejects_path_traversal() {
+        let plugin = create_test_plugin();
+        let claims = serde_json::json!({"tee": "sev-snp"});
+
+        for malformed in &[
+            "spiffe_id=spiffe://example.org/workload/../admin",
+            "spiffe_id=spiffe://example.org/workload/./foo",
+            "spiffe_id=spiffe://example.org/workload//double-slash",
+        ] {
+            let result = plugin
+                .handle(&[], malformed, "/svid/x509", &Method::GET, Some(&claims))
+                .await;
+
+            assert!(result.is_err(), "Expected rejection for: {}", malformed);
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("invalid path segments"), "Expected path segment error, got: {}", err);
+        }
     }
 
     #[tokio::test]
