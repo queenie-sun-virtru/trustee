@@ -3268,6 +3268,7 @@ dependencies = [
  "openssl",
  "p256",
  "p521",
+ "percent-encoding",
  "prometheus",
  "prost 0.14.1",
  "rand 0.8.5",

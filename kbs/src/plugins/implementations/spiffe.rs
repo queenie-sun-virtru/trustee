@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 use regex::Regex;
+use percent_encoding::percent_decode_str;
 
 use crate::plugins::plugin_manager::ClientPlugin;
 
@@ -429,16 +430,18 @@ impl SpiffePlugin {
 impl SpiffePlugin {
     /// Extract the `spiffe_id` value from a raw query string.
     ///
-    /// The agent sends the SPIFFE ID it determined via selector matching as:
-    ///   /kbs/v0/spiffe/svid/x509?spiffe_id=spiffe://trust.domain/workload/foo
+    /// The agent sends the SPIFFE ID percent-encoded via `url.Values.Encode()`:
+    ///   spiffe_id=spiffe%3A%2F%2Ftrust.domain%2Fworkload%2Ffoo
     ///
-    /// The `://` and `/` characters in the value are legal in query strings per
-    /// RFC 3986 and do not require percent-encoding, so no decoding is needed.
+    /// The value is decoded before validation and use.
     fn extract_spiffe_id_from_query(query: &str) -> Option<String> {
         for param in query.split('&') {
-            if let Some(value) = param.strip_prefix("spiffe_id=") {
-                if !value.is_empty() {
-                    return Some(value.to_string());
+            if let Some(encoded_value) = param.strip_prefix("spiffe_id=") {
+                if !encoded_value.is_empty() {
+                    let decoded = percent_decode_str(encoded_value)
+                        .decode_utf8()
+                        .ok()?;
+                    return Some(decoded.into_owned());
                 }
             }
         }
@@ -563,7 +566,7 @@ impl ClientPlugin for SpiffePlugin {
         // In this architecture, the agent runs in the same VM as KBS, within
         // the confidential VM trust boundary. The network path is:
         //   agent (container) → localhost → KBS (pod in same VM)
-        //
+        // 
         // Since both are inside the attested TEE, encryption adds minimal
         // security benefit but significant complexity (key management).
         //
@@ -955,6 +958,14 @@ mod tests {
         assert_eq!(SpiffePlugin::extract_spiffe_id_from_query("other=val"), None);
     }
 
+    #[test]
+    fn test_extract_spiffe_id_from_query_percent_encoded() {
+        // Go's url.Values.Encode() percent-encodes `:` and `/`
+        let query = "spiffe_id=spiffe%3A%2F%2Fexample.org%2Fworkload%2Ffoo";
+        let result = SpiffePlugin::extract_spiffe_id_from_query(query);
+        assert_eq!(result, Some("spiffe://example.org/workload/foo".to_string()));
+    }
+
     #[tokio::test]
     async fn test_handle_svid_uses_query_param_over_claims() {
         let plugin = create_test_plugin();
@@ -969,7 +980,7 @@ mod tests {
         let result = plugin
             .handle(
                 &[],
-                "spiffe_id=spiffe://example.org/workload/selector-matched",
+                "spiffe_id=spiffe%3A%2F%2Fexample.org%2Fworkload%2Fselector-matched",
                 "/svid/x509",
                 &Method::GET,
                 Some(&claims),
@@ -993,7 +1004,7 @@ mod tests {
         let result = plugin
             .handle(
                 &[],
-                "spiffe_id=spiffe://evil.org/admin",  // wrong trust domain
+                "spiffe_id=spiffe%3A%2F%2Fevil.org%2Fadmin",  // wrong trust domain
                 "/svid/x509",
                 &Method::GET,
                 Some(&claims),
