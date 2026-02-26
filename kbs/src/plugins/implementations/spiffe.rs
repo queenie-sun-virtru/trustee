@@ -423,6 +423,30 @@ impl SpiffePlugin {
 }
 
 // ============================================================================
+// Query Parameter Helpers
+// ============================================================================
+
+impl SpiffePlugin {
+    /// Extract the `spiffe_id` value from a raw query string.
+    ///
+    /// The agent sends the SPIFFE ID it determined via selector matching as:
+    ///   /kbs/v0/spiffe/svid/x509?spiffe_id=spiffe://trust.domain/workload/foo
+    ///
+    /// The `://` and `/` characters in the value are legal in query strings per
+    /// RFC 3986 and do not require percent-encoding, so no decoding is needed.
+    fn extract_spiffe_id_from_query(query: &str) -> Option<String> {
+        for param in query.split('&') {
+            if let Some(value) = param.strip_prefix("spiffe_id=") {
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+        None
+    }
+}
+
+// ============================================================================
 // ClientPlugin Trait Implementation
 // ============================================================================
 
@@ -431,7 +455,7 @@ impl ClientPlugin for SpiffePlugin {
     async fn handle(
         &self,
         _body: &[u8],
-        _query: &str,
+        query: &str,
         path: &str,
         method: &Method,
         claims: Option<&Value>,
@@ -448,12 +472,33 @@ impl ClientPlugin for SpiffePlugin {
         match sub_path {
             // GET /kbs/v0/spiffe/svid/x509
             "svid/x509" => {
+                // Attestation claims are always required — this gates the endpoint
+                // on a genuine TEE attestation regardless of which ID is issued.
                 let claims = claims.ok_or_else(|| {
                     anyhow!("Attestation claims required for SVID issuance")
                 })?;
 
-                // Map claims to SPIFFE ID
-                let spiffe_id = self.claims_to_spiffe_id(claims)?;
+                // Determine the SPIFFE ID to issue.
+                //
+                // The agent performs selector-based matching (Layer 2) and sends
+                // the desired ID as the `spiffe_id` query parameter. If present
+                // and within our trust domain we use it directly; otherwise we
+                // fall back to claims-based derivation.
+                let spiffe_id = if let Some(requested_id) = Self::extract_spiffe_id_from_query(query) {
+                    let expected_prefix = format!("spiffe://{}/", self.trust_domain);
+                    if !requested_id.starts_with(&expected_prefix) {
+                        bail!(
+                            "Requested SPIFFE ID '{}' is not in trust domain '{}'",
+                            requested_id,
+                            self.trust_domain
+                        );
+                    }
+                    log::info!("Issuing agent-requested SPIFFE ID: {}", requested_id);
+                    requested_id
+                } else {
+                    // No query param — derive from attestation claims.
+                    self.claims_to_spiffe_id(claims)?
+                };
 
                 // Generate SVID
                 let svid_response = self.generate_x509_svid(&spiffe_id).await?;
@@ -514,9 +559,16 @@ impl ClientPlugin for SpiffePlugin {
         path: &str,
         _method: &Method,
     ) -> Result<bool> {
-        // DEVELOPMENT MODE: Disable encryption for trusted network environments
-        // WARNING: This returns private key material unencrypted!
-        // In production, enable encryption and implement JWE decryption in the client
+        // SECURITY NOTE: Encryption disabled for sidecar deployment mode
+        // In this architecture, the agent runs in the same VM as KBS, within
+        // the confidential VM trust boundary. The network path is:
+        //   agent (container) → localhost → KBS (pod in same VM)
+        //
+        // Since both are inside the attested TEE, encryption adds minimal
+        // security benefit but significant complexity (key management).
+        //
+        // For production deployments where agent/KBS are on different machines,
+        // re-enable encryption by returning Ok(true) for sensitive endpoints.
         Ok(false)
         
         // PRODUCTION MODE (commented out):
@@ -877,5 +929,106 @@ mod tests {
             .await;
 
         assert!(result.is_err());
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests for query-param SPIFFE ID path
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_extract_spiffe_id_from_query_present() {
+        let query = "spiffe_id=spiffe://example.org/workload/foo";
+        let result = SpiffePlugin::extract_spiffe_id_from_query(query);
+        assert_eq!(result, Some("spiffe://example.org/workload/foo".to_string()));
+    }
+
+    #[test]
+    fn test_extract_spiffe_id_from_query_with_other_params() {
+        let query = "other=val&spiffe_id=spiffe://example.org/workload/bar&extra=x";
+        let result = SpiffePlugin::extract_spiffe_id_from_query(query);
+        assert_eq!(result, Some("spiffe://example.org/workload/bar".to_string()));
+    }
+
+    #[test]
+    fn test_extract_spiffe_id_from_query_absent() {
+        assert_eq!(SpiffePlugin::extract_spiffe_id_from_query(""), None);
+        assert_eq!(SpiffePlugin::extract_spiffe_id_from_query("other=val"), None);
+    }
+
+    #[tokio::test]
+    async fn test_handle_svid_uses_query_param_over_claims() {
+        let plugin = create_test_plugin();
+
+        // Claims would produce ns/default/sa/svc, but the query param requests
+        // a different workload ID — the query param must win.
+        let claims = serde_json::json!({
+            "namespace": "default",
+            "serviceaccount": "svc"
+        });
+
+        let result = plugin
+            .handle(
+                &[],
+                "spiffe_id=spiffe://example.org/workload/selector-matched",
+                "/svid/x509",
+                &Method::GET,
+                Some(&claims),
+            )
+            .await;
+
+        assert!(result.is_ok(), "Handle failed: {:?}", result.err());
+        let response: SvidResponse = serde_json::from_slice(&result.unwrap()).unwrap();
+        assert_eq!(
+            response.spiffe_id,
+            "spiffe://example.org/workload/selector-matched"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_svid_rejects_wrong_trust_domain() {
+        let plugin = create_test_plugin();
+
+        let claims = serde_json::json!({"tee": "sev-snp"});
+
+        let result = plugin
+            .handle(
+                &[],
+                "spiffe_id=spiffe://evil.org/admin",  // wrong trust domain
+                "/svid/x509",
+                &Method::GET,
+                Some(&claims),
+            )
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not in trust domain"), "Expected trust domain error, got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn test_handle_svid_falls_back_to_claims_when_no_query_param() {
+        let plugin = create_test_plugin();
+
+        let claims = serde_json::json!({
+            "namespace": "prod",
+            "serviceaccount": "payment"
+        });
+
+        let result = plugin
+            .handle(
+                &[],
+                "",  // no spiffe_id query param
+                "/svid/x509",
+                &Method::GET,
+                Some(&claims),
+            )
+            .await;
+
+        assert!(result.is_ok(), "Handle failed: {:?}", result.err());
+        let response: SvidResponse = serde_json::from_slice(&result.unwrap()).unwrap();
+        assert_eq!(
+            response.spiffe_id,
+            "spiffe://example.org/ns/prod/sa/payment"
+        );
     }
 }
